@@ -8,12 +8,12 @@ upd:\
 \- пробросил ошибки для process()\
 
 ## навскидку схема
-main
+main\
 \- zookeeper\
 \- kafka\
 \- postgres-db\
-other
-\- kafka-ui
+other\
+\- kafka-ui\
 \- process-script // скрипт, который типо работает по логике, описанной в тестовом\
 \- db-init // скрипт для создания таблицы в бд\
 \- consumer-pg // просто тестовый консумер - будет удален\
