@@ -91,10 +91,10 @@ services:
     profiles:
     - cons
   
-  consumer-rw:
-    container_name: consumer-rw
+  process-script:
+    container_name: process-script
     build:
-      context: consumer-rw
+      context: process-script
     environment:
       kafkaURL: kafka:9092
       topic: topic1
