@@ -1,0 +1,132 @@
+version: '3.8'
+services:
+
+  zookeeper:
+    hostname: zookeeper
+    container_name: zookeeper
+    image: bitnami/zookeeper:latest
+    restart: always
+    expose:
+    - "2181"
+    ports:
+    - "2181:2181"
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: yes
+
+  kafka:
+    hostname: kafka
+    container_name: kafka-0
+    image: bitnami/kafka:2.7.0
+    restart: always
+    env_file:
+    - kafka/kafka-variables.env
+    depends_on:
+    - zookeeper
+    expose:
+    - "9092"
+    - "9997"
+    ports:
+    - '9092:9092'
+    - '9997:9997'
+  
+  postgres-db:
+    container_name: postgres-db
+    hostname: postgres
+    image: postgres:16.3-alpine3.20
+    restart: always
+    ports:
+    - "5436:5432"
+    expose:
+    - "5436"
+    environment:
+    - POSTGRES_PASSWORD=jkjl
+    - POSTGRES_USER=admin
+    - POSTGRES_DB=postgres
+
+  kafka-ui:
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:latest
+    ports:
+    - '8088:8080'
+    environment:
+      DYNAMIC_CONFIG_ENABLED: true
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    depends_on: 
+    - kafka
+    profiles:
+    - ui
+
+  producer-random:
+    container_name: producer-random
+    build:
+      context: producer-random
+    environment:
+      kafkaURL: kafka:9092
+      topic: topic1
+    depends_on: 
+    - kafka
+    - postgres-db
+    restart: no
+    profiles:
+    - prod
+
+  consumer:
+    container_name: consumer
+    build:
+      context: consumer-pg
+    environment:
+      kafkaURL: kafka:9092
+      topic: topic1
+      GroupID: group1
+      postgresHost: postgres
+      postgresPort: 5432
+      postgresUser: admin
+      postgresPassword: jkjl
+      postgresDBName: postgres
+      tableName: documents
+    depends_on: 
+    - kafka
+    - postgres-db
+    restart: no
+    profiles:
+    - cons
+  
+  consumer-rw:
+    container_name: consumer-rw
+    build:
+      context: consumer-rw
+    environment:
+      kafkaURL: kafka:9092
+      topic: topic1
+      GroupID: group1
+      postgresHost: postgres
+      postgresPort: 5432
+      postgresUser: admin
+      postgresPassword: jkjl
+      postgresDBName: postgres
+      tableName: documents
+    depends_on: 
+    - kafka
+    - postgres-db
+    restart: no
+    profiles:
+    - s
+
+  db-initializer:
+    container_name: db-initializer
+    build:
+      context: db-init
+    environment:
+      postgresHost: postgres
+      postgresPort: 5432
+      postgresUser: admin
+      postgresPassword: jkjl
+      postgresDBName: postgres
+      tableName: documents
+    depends_on: 
+    - kafka
+    restart: no
+    profiles:
+    - init    
