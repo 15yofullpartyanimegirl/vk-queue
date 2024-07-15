@@ -24,10 +24,8 @@ services:
     - zookeeper
     expose:
     - "9092"
-    - "9997"
     ports:
     - '9092:9092'
-    - '9997:9997'
   
   postgres-db:
     container_name: postgres-db

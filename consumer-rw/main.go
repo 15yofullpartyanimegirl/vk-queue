@@ -12,14 +12,38 @@ import (
 	kafka "github.com/segmentio/kafka-go"
 )
 
-func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
+func getKafkaReader() *kafka.Reader {
+	kafkaURL := os.Getenv("kafkaURL")
+	topic := os.Getenv("topic")
+	groupID := os.Getenv("groupID")
 	return kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  []string{kafkaURL},
 		GroupID:  groupID,
 		Topic:    topic,
-		MinBytes: 1,    // ?
-		MaxBytes: 10e6, // 10MB
+		MinBytes: 1,
+		MaxBytes: 10e2,
 	})
+}
+
+func getKafkaWriter() *kafka.Writer {
+	kafkaURL := os.Getenv("kafkaURL")
+	return &kafka.Writer{
+		Addr:     kafka.TCP(kafkaURL),
+		Topic:    "out-queue-0",
+		Balancer: &kafka.LeastBytes{},
+	}
+}
+
+func getConn() *sql.DB {
+	psqlInfo := getDBInfo()
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err = db.Ping(); err != nil {
+		log.Fatal(err)
+	}
+	return db
 }
 
 func getDBInfo() string {
@@ -52,6 +76,16 @@ func (d *Document) readRow(rows *sql.Rows) {
 	rows.Scan(&d.url, &d.pubDate, &d.fetchTime, &d.text, &d.firstFetchTime)
 }
 
+func getDocument(db *sql.DB, doc *Document) Document {
+	rows, err := db.Query("SELECT * FROM public.documents WHERE url=$1", doc.url)
+	if err != nil {
+		log.Fatal("failed sql query: ", err)
+	}
+	var r Document
+	r.readRow(rows)
+	return r
+}
+
 func docCheck(db *sql.DB, doc *Document) bool {
 	var n int
 	rows, err := db.Query("SELECT count(*) FROM public.documents WHERE url=$1", doc.url)
@@ -71,37 +105,34 @@ func createDocument(db *sql.DB, doc *Document) {
 	log.Println("new doc, insert operation has done")
 }
 
-func getDocument(db *sql.DB, doc *Document) Document {
-	rows, err := db.Query("SELECT * FROM public.documents WHERE url=$1", doc.url)
-	if err != nil {
-		log.Fatal("failed sql query: ", err)
-	}
-	var r Document
-	r.readRow(rows)
-	return r
-}
+func updateDocument(db *sql.DB, doc *Document) error {
+	// cached docinfo from db
+	image := getDocument(db, doc)
 
-func updateDocument(db *sql.DB, doc *Document) {
-	rows, err := db.Query("SELECT * FROM public.documents WHERE url=$1", doc.url)
-	if err != nil {
-		log.Fatal("failed sql query: ", err)
+	// exceptions
+	// doc.ft = image.ft message dublicte error ??
+	if doc.fetchTime == image.fetchTime {
+		return fmt.Errorf("dublicated docs")
 	}
-	var image Document
-	image.readRow(rows)
+
+	// valid cases
+	// catch firstFetch doc
 	if doc.fetchTime < image.firstFetchTime {
-		_, err1 := db.Exec("UPDATE public.documents SET firstfetchtime=$1, pubdate=$2 WHERE url=$3", doc.fetchTime, doc.pubDate, doc.url)
-		if err1 != nil {
-			log.Fatal("failed to write messages:", err)
+		_, err := db.Exec("UPDATE public.documents SET firstfetchtime=$1, pubdate=$2 WHERE url=$3", doc.fetchTime, doc.pubDate, doc.url)
+		if err != nil {
+			log.Fatal("failed sql query: ", err)
+			return err
 		}
 	}
-	// elseif doc.ft == image.ft message dublicte error ??
+	// update data for newest doc
 	if doc.fetchTime > image.fetchTime {
-		_, err1 := db.Exec("UPDATE public.documents SET fetchtime=$1, textval=$2 WHERE url=$3", doc.fetchTime, doc.text, doc.url)
-		if err1 != nil {
-			log.Fatal("failed to write messages:", err)
+		_, err := db.Exec("UPDATE public.documents SET fetchtime=$1, textval=$2 WHERE url=$3", doc.fetchTime, doc.text, doc.url)
+		if err != nil {
+			log.Fatal("failed sql query: ", err)
+			return err
 		}
 	}
-	defer rows.Close()
+	return nil
 }
 
 type Headers []kafka.Header
@@ -140,23 +171,42 @@ func formHeaders(doc *Document) Headers {
 	return r
 }
 
-func main() {
-	// get kafka reader using environment variables.
-	kafkaURL := os.Getenv("kafkaURL")
-	topic := os.Getenv("topic")
-	groupID := os.Getenv("groupID")
-	reader := getKafkaReader(kafkaURL, topic, groupID)
-	defer reader.Close()
-
-	// get postgres connection
+func process(doc *Document) (*Document, error) {
 	psqlInfo := getDBInfo()
 	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err = db.Ping(); err != nil {
+	if err := db.Ping(); err != nil {
 		log.Fatal(err)
 	}
+	defer db.Close()
+
+	if docCheck(db, doc) {
+		createDocument(db, doc)
+	} else {
+		err := updateDocument(db, doc)
+		if err != nil {
+			return doc, err
+		}
+	}
+
+	image := getDocument(db, doc)
+
+	return &image, nil
+}
+
+type Processor interface {
+	process(doc *Document) (*Document, error)
+}
+
+func main() {
+	// get kafka reader using environment variables.
+	reader := getKafkaReader()
+	defer reader.Close()
+
+	// get postgres connection
+	db := getConn()
 	defer db.Close()
 
 	// consuming
@@ -168,36 +218,25 @@ func main() {
 	}
 	log.Println(msg.Headers)
 
+	// doc initialization
 	var doc Document
 	doc.read(msg)
 
-	// check doc id
-	if docCheck(db, &doc) {
-		createDocument(db, &doc)
-	} else {
-		updateDocument(db, &doc)
-	}
+	// -
+	image, _ := process(&doc)
 
-	w := &kafka.Writer{
-		Addr:     kafka.TCP(kafkaURL),
-		Topic:    "out-queue-0",
-		Balancer: &kafka.LeastBytes{},
-	}
+	// produce processed msg
+	writer := getKafkaWriter()
+	defer writer.Close()
 
-	image := getDocument(db, &doc)
-
-	if err := w.WriteMessages(context.Background(),
+	if err := writer.WriteMessages(context.Background(),
 		kafka.Message{
-			Key:     []byte("Key-X0"),
+			Key:     []byte(image.url),
 			Value:   []byte(nil),
-			Headers: formHeaders(&image),
+			Headers: formHeaders(image),
 		},
 	); err != nil {
 		log.Fatal("failed to write messages:", err)
-	}
-
-	if err := w.Close(); err != nil {
-		log.Fatal("failed to close writer:", err)
 	}
 
 }
