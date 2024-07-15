@@ -28,9 +28,10 @@ func getKafkaReader() *kafka.Reader {
 func getKafkaWriter() *kafka.Writer {
 	kafkaURL := os.Getenv("kafkaURL")
 	return &kafka.Writer{
-		Addr:     kafka.TCP(kafkaURL),
-		Topic:    "out-queue-0",
-		Balancer: &kafka.LeastBytes{},
+		Addr:                   kafka.TCP(kafkaURL),
+		Topic:                  "out-queue-0",
+		Balancer:               &kafka.LeastBytes{},
+		AllowAutoTopicCreation: true,
 	}
 }
 
@@ -77,6 +78,7 @@ func (d *Document) readRow(rows *sql.Rows) {
 }
 
 func getDocument(db *sql.DB, doc *Document) Document {
+	// write info to document from db
 	rows, err := db.Query("SELECT * FROM public.documents WHERE url=$1", doc.url)
 	if err != nil {
 		log.Fatal("failed sql query: ", err)
@@ -87,6 +89,8 @@ func getDocument(db *sql.DB, doc *Document) Document {
 }
 
 func docCheck(db *sql.DB, doc *Document) bool {
+	// check existence of document in db
+	// there is no error forwarding :(
 	var n int
 	rows, err := db.Query("SELECT count(*) FROM public.documents WHERE url=$1", doc.url)
 	if err != nil {
@@ -97,12 +101,15 @@ func docCheck(db *sql.DB, doc *Document) bool {
 	return n > 0
 }
 
-func createDocument(db *sql.DB, doc *Document) {
+func createDocument(db *sql.DB, doc *Document) error {
+	// push new document info record
 	_, err := db.Exec("INSERT INTO public.documents VALUES ($1, $2, $3, $4, $5)", doc.url, doc.pubDate, doc.fetchTime, doc.text, doc.fetchTime)
 	if err != nil {
-		log.Fatal("failed sql query: ", err)
+		log.Println("createDocument func: failed sql query")
+		return err
 	}
 	log.Println("new doc, insert operation has done")
+	return nil
 }
 
 func updateDocument(db *sql.DB, doc *Document) error {
@@ -112,15 +119,16 @@ func updateDocument(db *sql.DB, doc *Document) error {
 	// exceptions
 	// doc.ft = image.ft message dublicte error ??
 	if doc.fetchTime == image.fetchTime {
+		log.Println("updateDocument func: duplicate case")
 		return fmt.Errorf("dublicated docs")
 	}
 
-	// valid cases
+	// correct cases
 	// catch firstFetch doc
 	if doc.fetchTime < image.firstFetchTime {
 		_, err := db.Exec("UPDATE public.documents SET firstfetchtime=$1, pubdate=$2 WHERE url=$3", doc.fetchTime, doc.pubDate, doc.url)
 		if err != nil {
-			log.Fatal("failed sql query: ", err)
+			log.Println("updateDocument func: failed sql query")
 			return err
 		}
 	}
@@ -128,7 +136,7 @@ func updateDocument(db *sql.DB, doc *Document) error {
 	if doc.fetchTime > image.fetchTime {
 		_, err := db.Exec("UPDATE public.documents SET fetchtime=$1, textval=$2 WHERE url=$3", doc.fetchTime, doc.text, doc.url)
 		if err != nil {
-			log.Fatal("failed sql query: ", err)
+			log.Println("updateDocument func: failed sql query")
 			return err
 		}
 	}
@@ -138,6 +146,7 @@ func updateDocument(db *sql.DB, doc *Document) error {
 type Headers []kafka.Header
 
 func formHeaders(doc *Document) Headers {
+	// convert Document -> Headers struct
 	pubDateBlob := make([]byte, 8)
 	fetchTimeBlob := make([]byte, 8)
 	firstFetchTimeBlob := make([]byte, 8)
@@ -172,25 +181,38 @@ func formHeaders(doc *Document) Headers {
 }
 
 func process(doc *Document) (*Document, error) {
+	// process func
 	psqlInfo := getDBInfo()
 	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
-		log.Fatal(err)
+		log.Println("process func: open db problem")
+		return nil, err
 	}
 	if err := db.Ping(); err != nil {
-		log.Fatal(err)
+		log.Println("process func: ping db problem")
+		return nil, err
 	}
 	defer db.Close()
 
+	// existence check
 	if docCheck(db, doc) {
-		createDocument(db, doc)
+		// for first document message
+		err := createDocument(db, doc)
+		if err != nil {
+			return nil, err
+		}
 	} else {
+		// check fields conditions, cache info to db
 		err := updateDocument(db, doc)
 		if err != nil {
+			return nil, err
+		} else if err == fmt.Errorf("dublicated docs") {
+			// some bad practices :) errors.Is() needed
 			return doc, err
 		}
 	}
 
+	// pull updated doc from db
 	image := getDocument(db, doc)
 
 	return &image, nil
@@ -229,7 +251,10 @@ func main() {
 	doc.read(msg)
 
 	// -
-	image, _ := process(&doc)
+	image, err := process(&doc)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// produce processed msg
 	if err := writer.WriteMessages(context.Background(),

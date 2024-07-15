@@ -53,9 +53,10 @@ func main() {
 	log.Println("start producing ... !!")
 	// make a writer that produces to topic-A, using the least-bytes distribution
 	w := &kafka.Writer{
-		Addr:     kafka.TCP(kafkaURL),
-		Topic:    topic,
-		Balancer: &kafka.LeastBytes{},
+		Addr:                   kafka.TCP(kafkaURL),
+		Topic:                  topic,
+		Balancer:               &kafka.LeastBytes{},
+		AllowAutoTopicCreation: true,
 	}
 
 	err := w.WriteMessages(context.Background(),
