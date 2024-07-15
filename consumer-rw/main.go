@@ -201,7 +201,7 @@ type Processor interface {
 }
 
 func main() {
-	// get kafka reader using environment variables.
+	// get kafka reader using environment variables
 	reader := getKafkaReader()
 	defer reader.Close()
 
@@ -209,6 +209,12 @@ func main() {
 	db := getConn()
 	defer db.Close()
 
+	// get kafka writer using environment variables
+	writer := getKafkaWriter()
+	defer writer.Close()
+	// END OF DECLARATION SECTION
+
+	// may be use a loop
 	// consuming
 	log.Println("start consuming ... !!")
 
@@ -226,9 +232,6 @@ func main() {
 	image, _ := process(&doc)
 
 	// produce processed msg
-	writer := getKafkaWriter()
-	defer writer.Close()
-
 	if err := writer.WriteMessages(context.Background(),
 		kafka.Message{
 			Key:     []byte(image.url),
