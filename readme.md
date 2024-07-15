@@ -8,6 +8,8 @@ main
 - zookeeper
 - kafka
 - postgres-db
+
+
 other
 - kafka-ui
 - db-init // скрипт для создания таблицы в бд
