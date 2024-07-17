@@ -12,41 +12,6 @@ import (
 	kafka "github.com/segmentio/kafka-go"
 )
 
-func getKafkaReader() *kafka.Reader {
-	kafkaURL := os.Getenv("kafkaURL")
-	topic := os.Getenv("topic")
-	groupID := os.Getenv("groupID")
-	return kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  []string{kafkaURL},
-		GroupID:  groupID,
-		Topic:    topic,
-		MinBytes: 1,
-		MaxBytes: 10e2,
-	})
-}
-
-func getKafkaWriter() *kafka.Writer {
-	kafkaURL := os.Getenv("kafkaURL")
-	return &kafka.Writer{
-		Addr:                   kafka.TCP(kafkaURL),
-		Topic:                  "out-queue-0",
-		Balancer:               &kafka.LeastBytes{},
-		AllowAutoTopicCreation: true,
-	}
-}
-
-func getConn() *sql.DB {
-	psqlInfo := getDBInfo()
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err = db.Ping(); err != nil {
-		log.Fatal(err)
-	}
-	return db
-}
-
 func getDBInfo() string {
 	host := os.Getenv("postgresHost")
 	port := os.Getenv("postgresPort")
@@ -78,7 +43,6 @@ func (d *Document) readRow(rows *sql.Rows) {
 }
 
 func getDocument(db *sql.DB, doc *Document) Document {
-	// write info to document from db
 	rows, err := db.Query("SELECT * FROM public.documents WHERE url=$1", doc.Url)
 	if err != nil {
 		log.Fatal("failed sql query: ", err)
@@ -88,21 +52,18 @@ func getDocument(db *sql.DB, doc *Document) Document {
 	return r
 }
 
-func docCheck(db *sql.DB, doc *Document) bool {
-	// check existence of document in db
-	// there is no error forwarding :(
+func docCheck(db *sql.DB, doc *Document) (bool, error) {
 	var n int
 	rows, err := db.Query("SELECT count(*) FROM public.documents WHERE url=$1", doc.Url)
 	if err != nil {
-		log.Fatal("failed sql query: ", err)
+		return false, err
 	}
 	defer rows.Close()
 	rows.Scan(&n)
-	return n > 0
+	return n > 0, nil
 }
 
 func createDocument(db *sql.DB, doc *Document) error {
-	// push new document info record
 	_, err := db.Exec("INSERT INTO public.documents VALUES ($1, $2, $3, $4, $5)", doc.Url, doc.PubDate, doc.FetchTime, doc.Text, doc.FetchTime)
 	if err != nil {
 		log.Println("createDocument func: failed sql query")
@@ -113,18 +74,12 @@ func createDocument(db *sql.DB, doc *Document) error {
 }
 
 func updateDocument(db *sql.DB, doc *Document) error {
-	// cached docinfo from db
 	image := getDocument(db, doc)
 
-	// exceptions
-	// doc.ft = image.ft message dublicte error ??
 	if doc.FetchTime == image.FetchTime {
 		log.Println("updateDocument func: duplicate case")
 		return fmt.Errorf("dublicated docs")
 	}
-
-	// correct cases
-	// catch firstFetch doc
 	if doc.FetchTime < image.FirstFetchTime {
 		_, err := db.Exec("UPDATE public.documents SET firstfetchtime=$1, pubdate=$2 WHERE url=$3", doc.FetchTime, doc.PubDate, doc.Url)
 		if err != nil {
@@ -132,7 +87,6 @@ func updateDocument(db *sql.DB, doc *Document) error {
 			return err
 		}
 	}
-	// update data for newest doc
 	if doc.FetchTime > image.FetchTime {
 		_, err := db.Exec("UPDATE public.documents SET fetchtime=$1, textval=$2 WHERE url=$3", doc.FetchTime, doc.Text, doc.Url)
 		if err != nil {
@@ -146,7 +100,6 @@ func updateDocument(db *sql.DB, doc *Document) error {
 type Headers []kafka.Header
 
 func formHeaders(doc *Document) Headers {
-	// convert Document -> Headers struct
 	pubDateBlob := make([]byte, 8)
 	fetchTimeBlob := make([]byte, 8)
 	firstFetchTimeBlob := make([]byte, 8)
@@ -181,7 +134,10 @@ func formHeaders(doc *Document) Headers {
 }
 
 func process(doc *Document) (*Document, error) {
-	// process func
+	// connect to DB
+	// check: is doc in DB
+	// create or update doc into DB
+	// get cached doc from DB
 	psqlInfo := getDBInfo()
 	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
@@ -194,25 +150,25 @@ func process(doc *Document) (*Document, error) {
 	}
 	defer db.Close()
 
-	// existence check
-	if docCheck(db, doc) {
-		// for first document message
+	docExistence, err := docCheck(db, doc)
+	if err != nil {
+		return doc, err
+	}
+
+	if docExistence {
 		err := createDocument(db, doc)
 		if err != nil {
-			return nil, err
+			return doc, err
 		}
 	} else {
-		// check fields conditions, cache info to db
 		err := updateDocument(db, doc)
 		if err != nil {
 			return nil, err
 		} else if err == fmt.Errorf("dublicated docs") {
-			// some bad practices :) errors.Is() needed
 			return doc, err
 		}
 	}
 
-	// pull updated doc from db
 	image := getDocument(db, doc)
 
 	return &image, nil
@@ -223,20 +179,38 @@ type Processor interface {
 }
 
 func main() {
-	// get kafka reader using environment variables
-	reader := getKafkaReader()
+	// CONNECTIONS DECLARATION
+	kafkaURL := os.Getenv("kafkaURL")
+	topic := os.Getenv("topic")
+	groupID := os.Getenv("groupID")
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  []string{kafkaURL},
+		GroupID:  groupID,
+		Topic:    topic,
+		MaxBytes: 10e2,
+	})
 	defer reader.Close()
 
-	// get postgres connection
-	db := getConn()
-	defer db.Close()
-
-	// get kafka writer using environment variables
-	writer := getKafkaWriter()
+	writer := kafka.Writer{
+		Addr:                   kafka.TCP(kafkaURL),
+		Topic:                  "out-queue-0",
+		Balancer:               &kafka.LeastBytes{},
+		AllowAutoTopicCreation: true,
+	}
 	defer writer.Close()
-	// END OF DECLARATION SECTION
 
-	// may be use a loop
+	psqlInfo := getDBInfo()
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err = db.Ping(); err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	//  DECLARATION END
+
+	// READ, process(), WRITE
 	// consuming
 	log.Println("start consuming ... !!")
 
@@ -254,6 +228,10 @@ func main() {
 	image, err := process(&doc)
 	if err != nil {
 		log.Fatal(err)
+	} else if err == fmt.Errorf("dublicated docs") {
+		// errors.Is() instead needed
+		log.Println(err)
+		err = nil
 	}
 
 	// produce processed msg
