@@ -58,28 +58,28 @@ func getDBInfo() string {
 }
 
 type Document struct {
-	url            string
-	pubDate        uint64
-	fetchTime      uint64
-	text           string
-	firstFetchTime uint64
+	Url            string
+	PubDate        uint64
+	FetchTime      uint64
+	Text           string
+	FirstFetchTime uint64
 }
 
 func (d *Document) read(msg kafka.Message) {
-	d.url = string(msg.Headers[0].Value)
-	d.pubDate = binary.BigEndian.Uint64(msg.Headers[1].Value)
-	d.fetchTime = binary.BigEndian.Uint64(msg.Headers[2].Value)
-	d.text = string(msg.Headers[3].Value)
-	d.firstFetchTime = binary.BigEndian.Uint64(msg.Headers[4].Value)
+	d.Url = string(msg.Headers[0].Value)
+	d.PubDate = binary.BigEndian.Uint64(msg.Headers[1].Value)
+	d.FetchTime = binary.BigEndian.Uint64(msg.Headers[2].Value)
+	d.Text = string(msg.Headers[3].Value)
+	d.FirstFetchTime = binary.BigEndian.Uint64(msg.Headers[4].Value)
 }
 
 func (d *Document) readRow(rows *sql.Rows) {
-	rows.Scan(&d.url, &d.pubDate, &d.fetchTime, &d.text, &d.firstFetchTime)
+	rows.Scan(&d.Url, &d.PubDate, &d.FetchTime, &d.Text, &d.FirstFetchTime)
 }
 
 func getDocument(db *sql.DB, doc *Document) Document {
 	// write info to document from db
-	rows, err := db.Query("SELECT * FROM public.documents WHERE url=$1", doc.url)
+	rows, err := db.Query("SELECT * FROM public.documents WHERE url=$1", doc.Url)
 	if err != nil {
 		log.Fatal("failed sql query: ", err)
 	}
@@ -92,7 +92,7 @@ func docCheck(db *sql.DB, doc *Document) bool {
 	// check existence of document in db
 	// there is no error forwarding :(
 	var n int
-	rows, err := db.Query("SELECT count(*) FROM public.documents WHERE url=$1", doc.url)
+	rows, err := db.Query("SELECT count(*) FROM public.documents WHERE url=$1", doc.Url)
 	if err != nil {
 		log.Fatal("failed sql query: ", err)
 	}
@@ -103,7 +103,7 @@ func docCheck(db *sql.DB, doc *Document) bool {
 
 func createDocument(db *sql.DB, doc *Document) error {
 	// push new document info record
-	_, err := db.Exec("INSERT INTO public.documents VALUES ($1, $2, $3, $4, $5)", doc.url, doc.pubDate, doc.fetchTime, doc.text, doc.fetchTime)
+	_, err := db.Exec("INSERT INTO public.documents VALUES ($1, $2, $3, $4, $5)", doc.Url, doc.PubDate, doc.FetchTime, doc.Text, doc.FetchTime)
 	if err != nil {
 		log.Println("createDocument func: failed sql query")
 		return err
@@ -118,23 +118,23 @@ func updateDocument(db *sql.DB, doc *Document) error {
 
 	// exceptions
 	// doc.ft = image.ft message dublicte error ??
-	if doc.fetchTime == image.fetchTime {
+	if doc.FetchTime == image.FetchTime {
 		log.Println("updateDocument func: duplicate case")
 		return fmt.Errorf("dublicated docs")
 	}
 
 	// correct cases
 	// catch firstFetch doc
-	if doc.fetchTime < image.firstFetchTime {
-		_, err := db.Exec("UPDATE public.documents SET firstfetchtime=$1, pubdate=$2 WHERE url=$3", doc.fetchTime, doc.pubDate, doc.url)
+	if doc.FetchTime < image.FirstFetchTime {
+		_, err := db.Exec("UPDATE public.documents SET firstfetchtime=$1, pubdate=$2 WHERE url=$3", doc.FetchTime, doc.PubDate, doc.Url)
 		if err != nil {
 			log.Println("updateDocument func: failed sql query")
 			return err
 		}
 	}
 	// update data for newest doc
-	if doc.fetchTime > image.fetchTime {
-		_, err := db.Exec("UPDATE public.documents SET fetchtime=$1, textval=$2 WHERE url=$3", doc.fetchTime, doc.text, doc.url)
+	if doc.FetchTime > image.FetchTime {
+		_, err := db.Exec("UPDATE public.documents SET fetchtime=$1, textval=$2 WHERE url=$3", doc.FetchTime, doc.Text, doc.Url)
 		if err != nil {
 			log.Println("updateDocument func: failed sql query")
 			return err
@@ -151,14 +151,14 @@ func formHeaders(doc *Document) Headers {
 	fetchTimeBlob := make([]byte, 8)
 	firstFetchTimeBlob := make([]byte, 8)
 
-	binary.BigEndian.PutUint64(pubDateBlob, doc.pubDate)
-	binary.BigEndian.PutUint64(fetchTimeBlob, doc.fetchTime)
-	binary.BigEndian.PutUint64(firstFetchTimeBlob, doc.firstFetchTime)
+	binary.BigEndian.PutUint64(pubDateBlob, doc.PubDate)
+	binary.BigEndian.PutUint64(fetchTimeBlob, doc.FetchTime)
+	binary.BigEndian.PutUint64(firstFetchTimeBlob, doc.FirstFetchTime)
 
 	r := Headers{
 		kafka.Header{
 			Key:   "url",
-			Value: []byte(doc.url),
+			Value: []byte(doc.Url),
 		},
 		kafka.Header{
 			Key:   "pubDate",
@@ -170,7 +170,7 @@ func formHeaders(doc *Document) Headers {
 		},
 		kafka.Header{
 			Key:   "text",
-			Value: []byte(doc.text),
+			Value: []byte(doc.Text),
 		},
 		kafka.Header{
 			Key:   "firstFetchTime",
@@ -259,7 +259,7 @@ func main() {
 	// produce processed msg
 	if err := writer.WriteMessages(context.Background(),
 		kafka.Message{
-			Key:     []byte(image.url),
+			Key:     []byte(image.Url),
 			Value:   []byte(nil),
 			Headers: formHeaders(image),
 		},

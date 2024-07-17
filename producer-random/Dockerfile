@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o main
 FROM scratch
 
 # Copy our static executable.
-COPY --from=builder /app/main /app/main
-
+COPY --from=builder /app/main /
+COPY --from=builder /app/example.json /
 # Run the hello binary.
-ENTRYPOINT ["/app/main"]
+ENTRYPOINT ["/main"]

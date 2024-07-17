@@ -63,6 +63,7 @@ services:
     environment:
       kafkaURL: kafka:9092
       topic: topic1
+      msgfile: example.json
     depends_on: 
     - kafka
     - postgres-db

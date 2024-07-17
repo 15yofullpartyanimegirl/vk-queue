@@ -3,27 +3,37 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"log"
 	"os"
 
 	kafka "github.com/segmentio/kafka-go"
 )
 
+type Document struct {
+	Url            string `json:"url"`
+	PubDate        uint64 `json:"pubdate"`
+	FetchTime      uint64 `json:"fetchtime"`
+	Text           string `json:"text"`
+	FirstFetchTime uint64 `json:"firstfetchtime"`
+}
+
 type Headers []kafka.Header
 
-func testHeaders() Headers {
+func formHeaders(doc *Document) Headers {
+	// convert Document -> Headers struct
 	pubDateBlob := make([]byte, 8)
 	fetchTimeBlob := make([]byte, 8)
 	firstFetchTimeBlob := make([]byte, 8)
 
-	binary.BigEndian.PutUint64(pubDateBlob, uint64(10))
-	binary.BigEndian.PutUint64(fetchTimeBlob, uint64(10))
-	binary.BigEndian.PutUint64(firstFetchTimeBlob, uint64(10))
+	binary.BigEndian.PutUint64(pubDateBlob, doc.PubDate)
+	binary.BigEndian.PutUint64(fetchTimeBlob, doc.FetchTime)
+	binary.BigEndian.PutUint64(firstFetchTimeBlob, doc.FirstFetchTime)
 
 	r := Headers{
 		kafka.Header{
 			Key:   "url",
-			Value: []byte("test"),
+			Value: []byte(doc.Url),
 		},
 		kafka.Header{
 			Key:   "pubDate",
@@ -35,7 +45,7 @@ func testHeaders() Headers {
 		},
 		kafka.Header{
 			Key:   "text",
-			Value: []byte("tmp"),
+			Value: []byte(doc.Text),
 		},
 		kafka.Header{
 			Key:   "firstFetchTime",
@@ -50,8 +60,6 @@ func main() {
 	kafkaURL := os.Getenv("kafkaURL")
 	topic := os.Getenv("topic")
 
-	log.Println("start producing ... !!")
-	// make a writer that produces to topic-A, using the least-bytes distribution
 	w := &kafka.Writer{
 		Addr:                   kafka.TCP(kafkaURL),
 		Topic:                  topic,
@@ -59,18 +67,40 @@ func main() {
 		AllowAutoTopicCreation: true,
 	}
 
-	err := w.WriteMessages(context.Background(),
-		kafka.Message{
-			Key:     []byte("Key-D0"),
-			Value:   []byte(nil),
-			Headers: testHeaders(),
-		},
-	)
+	defer w.Close()
+
+	// get example messages
+	filepath := os.Getenv("msgfile")
+	file, err := os.ReadFile(filepath)
 	if err != nil {
-		log.Fatal("failed to write messages:", err)
+		log.Fatal(err)
 	}
 
-	if err := w.Close(); err != nil {
-		log.Fatal("failed to close writer:", err)
+	var docs []Document
+
+	if err := json.Unmarshal(file, &docs); err != nil {
+		log.Fatal(err)
 	}
+
+	log.Println(docs)
+
+	//
+
+	log.Println("start producing ... !!")
+	// make a writer that produces to topic-A, using the least-bytes distribution
+
+	for _, doc := range docs {
+		log.Printf("%s document was added", doc.Url)
+		err := w.WriteMessages(context.Background(),
+			kafka.Message{
+				Key:     []byte(doc.Url),
+				Value:   []byte(nil),
+				Headers: formHeaders(&doc),
+			},
+		)
+		if err != nil {
+			log.Fatal("failed to write messages:", err)
+		}
+	}
+
 }

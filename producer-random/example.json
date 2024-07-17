@@ -1,0 +1,44 @@
+[
+    {
+        "url": "n",
+        "pubDate": 12,
+        "fetchTime": 12,
+        "text": "n2"
+    },
+    {
+        "url": "n",
+        "pubDate": 14,
+        "fetchTime": 14,
+        "text": "n4"
+    },
+    {
+        "url": "n",
+        "pubDate": 16,
+        "fetchTime": 16,
+        "text": "n6"
+    },
+    {
+        "url": "m",
+        "pubDate": 12,
+        "fetchTime": 12,
+        "text": "m2"
+    },
+    {
+        "url": "m",
+        "pubDate": 14,
+        "fetchTime": 14,
+        "text": "m4"
+    },
+    {
+        "url": "m",
+        "pubDate": 16,
+        "fetchTime": 6,
+        "text": "m6"
+    },
+    {
+        "url": "k",
+        "pubDate": 18,
+        "fetchTime": 10,
+        "text": "m8"
+    }
+]
