@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"os"
 
@@ -210,39 +211,41 @@ func main() {
 	defer db.Close()
 	//  DECLARATION END
 
-	// READ, process(), WRITE
-	// consuming
-	log.Println("start consuming ... !!")
+	// LOOP: READ, process(), WRITE
+	for {
+		// consuming
+		msg, err := reader.ReadMessage(context.Background())
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			log.Fatal(err)
+		}
+		log.Println(msg.Headers)
 
-	msg, err := reader.ReadMessage(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Println(msg.Headers)
+		// doc initialization
+		var doc Document
+		doc.read(msg)
 
-	// doc initialization
-	var doc Document
-	doc.read(msg)
+		// -
+		image, err := process(&doc)
+		if err == fmt.Errorf("dublicated docs") {
+			// errors.Is() instead needed
+			log.Println(err)
+			err = nil
+		} else if err != nil {
+			log.Fatal(err)
+		}
 
-	// -
-	image, err := process(&doc)
-	if err != nil {
-		log.Fatal(err)
-	} else if err == fmt.Errorf("dublicated docs") {
-		// errors.Is() instead needed
-		log.Println(err)
-		err = nil
-	}
-
-	// produce processed msg
-	if err := writer.WriteMessages(context.Background(),
-		kafka.Message{
-			Key:     []byte(image.Url),
-			Value:   []byte(nil),
-			Headers: formHeaders(image),
-		},
-	); err != nil {
-		log.Fatal("failed to write messages:", err)
+		// produce processed msg
+		if err := writer.WriteMessages(context.Background(),
+			kafka.Message{
+				Key:     []byte(image.Url),
+				Value:   []byte(nil),
+				Headers: formHeaders(image),
+			},
+		); err != nil {
+			log.Fatal("failed to write messages:", err)
+		}
 	}
 
 }
